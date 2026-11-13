@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adaptive Drill</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+:root { --bg:#f6f7fb; --card:#fff; --ink:#1d2433; --mute:#667085; --line:#e3e6ee;
+        --acc:#5b8def; --ok:#1f9d55; --bad:#d64545; --warn:#c77c02; }
+* { box-sizing:border-box; }
+body { margin:0; font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif; background:var(--bg); color:var(--ink); }
+header { display:flex; gap:12px; align-items:center; padding:10px 20px; background:var(--card); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+header h1 { font-size:18px; margin:0 12px 0 0; }
+nav button { background:none; border:0; padding:8px 12px; font:inherit; color:var(--mute); cursor:pointer; border-radius:8px; }
+nav button.on { background:#e8efff; color:var(--acc); font-weight:600; }
+select, input { font:inherit; padding:4px 8px; border:1px solid var(--line); border-radius:6px; }
+main { max-width:860px; margin:24px auto; padding:0 16px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:16px; }
+.meta { color:var(--mute); font-size:14px; display:flex; gap:16px; flex-wrap:wrap; }
+.stem { white-space:pre-wrap; font-size:17px; margin:14px 0; }
+.choice { display:block; width:100%; text-align:left; margin:8px 0; padding:10px 14px; background:#fff; border:1px solid var(--line);
+          border-radius:8px; font:inherit; cursor:pointer; }
+.choice:hover { border-color:var(--acc); }
+.choice.sel { border-color:var(--acc); background:#eef3ff; }
+.choice.key { border-color:var(--ok); background:#eaf8f0; }
+.choice.wrong { border-color:var(--bad); background:#fdeeee; }
+.btn { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:9px 18px; font:inherit; cursor:pointer; }
+.btn.ghost { background:#fff; color:var(--acc); border:1px solid var(--acc); }
+.btn:disabled { opacity:.5; cursor:default; }
+.ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+.clock { font-variant-numeric:tabular-nums; font-weight:600; }
+table { width:100%; border-collapse:collapse; font-size:14px; }
+th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { color:var(--mute); font-weight:600; }
+.pill { display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px; background:#eef0f5; }
+.pill.mastered { background:#eaf8f0; color:var(--ok); } .pill.active { background:#eef3ff; color:var(--acc); }
+.row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.navgrid button { width:36px; height:32px; margin:3px; border:1px solid var(--line); border-radius:6px; background:#fff; cursor:pointer; }
+.navgrid button.ans { background:#eef3ff; } .navgrid button.flag { border-color:var(--warn); border-width:2px; }
+.navgrid button.cur { outline:2px solid var(--acc); }
+.hidden { display:none; }
+.stat { font-size:28px; font-weight:700; }
+.stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Adaptive Drill</h1>
+  <nav id="tabs">
+    <button data-tab="drill" class="on">Drill</button>
+    <button data-tab="set">Timed set</button>
+    <button data-tab="progress">Progress</button>
+    <button data-tab="bank">Bank</button>
+  </nav>
+  <label class="meta">Section <select id="section"><option value="">All</option></select></label>
+</header>
+<main>
+  <section id="tab-drill"><div class="card" id="drill"></div></section>
+  <section id="tab-set" class="hidden"><div class="card" id="set"></div></section>
+  <section id="tab-progress" class="hidden"><div id="progress"></div></section>
+  <section id="tab-bank" class="hidden"><div id="bank"></div></section>
+</main>
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const L = "ABCDEFGH";
+const mmss = (s) => { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
+async function api(path, body) {
+  const r = await fetch(path, body ? {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)} : {});
+  const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || r.status);
+  return j;
+}
+const section = () => $("#section").value;
+let tab = "drill";
+
+// ---------------------------------------------------------------- tabs
+document.querySelectorAll("#tabs button").forEach((b) => b.onclick = () => show(b.dataset.tab));
+function show(t) {
+  tab = t;
+  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
+  ["drill", "set", "progress", "bank"].forEach((k) => $("#tab-" + k).classList.toggle("hidden", k !== t));
+  ({drill: drillStart, set: setIntro, progress: loadProgress, bank: loadBank})[t]();
+}
+$("#section").onchange = () => show(tab);
+
+async function loadSections() {
+  const rows = await api("/api/sections");
+  $("#section").innerHTML = '<option value="">All</option>' +
+    rows.map((r) => `<option value="${esc(r.section)}">${esc(r.section)} (${r.items})</option>`).join("");
+}
+
+// ---------------------------------------------------------------- drill
+let cur = null, t0 = 0, tick = null, pick = null;
+async function drillStart() {
+  clearInterval(tick);
+  const box = $("#drill");
+  try {
+    cur = await api("/api/next" + (section() ? "?section=" + encodeURIComponent(section()) : ""));
+  } catch (e) { box.innerHTML = `<p class="bad">${esc(e.message)}</p>`; return; }
+  if (cur.done) { box.innerHTML = `<h2>All caught up</h2><p>${esc(cur.message)}</p>`; return; }
+  pick = null; t0 = performance.now();
+  box.innerHTML = `
+    <div class="meta"><span>${esc(cur.section)} / <b>${esc(cur.archetype)}</b></span>
+      <span>${esc(cur.difficulty || "")}</span>
+      <span>streak ${cur.streak}/${cur.need}</span>
+      ${cur.mode === "recheck" ? '<span class="warn">decay check</span>' : ""}
+      <span class="clock" id="dclock">0:00</span><span>target ${mmss(cur.target)}</span></div>
+    <div class="stem">${esc(cur.stem)}</div>
+    <div id="choices">${cur.choices.map((c, i) => `<button class="choice" data-i="${i}"><b>${L[i]}.</b> ${esc(c)}</button>`).join("")}</div>
+    <div class="row" style="margin-top:12px"><button class="btn" id="submit" disabled>Submit</button>
+      <span class="meta">Keys: A-${L[cur.choices.length - 1]} to pick, Enter to submit</span></div>
+    <div id="result"></div>`;
+  box.querySelectorAll(".choice").forEach((b) => b.onclick = () => choose(+b.dataset.i));
+  $("#submit").onclick = submit;
+  tick = setInterval(() => {
+    const s = (performance.now() - t0) / 1000;
+    const c = $("#dclock"); if (c) { c.textContent = mmss(s); c.className = "clock" + (s > cur.target ? " bad" : ""); }
+  }, 250);
+}
+function choose(i) {
+  if (!cur || cur.answered) return;
+  pick = i;
+  document.querySelectorAll("#choices .choice").forEach((b) => b.classList.toggle("sel", +b.dataset.i === i));
+  $("#submit").disabled = false;
+}
+async function submit() {
+  if (pick === null || cur.answered) return;
+  cur.answered = true; clearInterval(tick);
+  const seconds = (performance.now() - t0) / 1000;
+  const r = await api("/api/answer", {item_id: cur.item_id, given: L[pick], perm: cur.perm, seconds, mode: cur.mode});
+  document.querySelectorAll("#choices .choice").forEach((b) => {
+    const i = +b.dataset.i;
+    if (L[i] === r.key) b.classList.add("key"); else if (i === pick) b.classList.add("wrong");
+  });
+  const verdict = r.correct ? (r.on_time ? '<b class="ok">Correct and on time.</b>' : '<b class="warn">Correct, but over the target time: it does not count toward the streak.</b>')
+                            : '<b class="bad">Not this time.</b> This item is retired from future drills.';
+  const status = r.archetype_status === "mastered" ? '<p class="ok"><b>Archetype mastered.</b> It will come back for decay checks.</p>'
+               : r.archetype_status === "reopened" ? '<p class="bad"><b>Decay check missed:</b> the archetype is open again.</p>' : "";
+  $("#result").innerHTML = `<div class="card" style="margin-top:14px">${verdict}
+    <p class="meta">Time ${mmss(seconds)} / target ${mmss(r.target)} &middot; streak ${r.streak}/${r.need}</p>
+    <p><b>Pattern:</b> ${esc(cur.pattern)}</p><p>${esc(r.explanation)}</p>${status}
+    <button class="btn" id="nextq">Next</button></div>`;
+  $("#nextq").onclick = drillStart; $("#nextq").focus();
+}
+document.addEventListener("keydown", (e) => {
+  if (tab !== "drill" || !cur || cur.done || e.target.tagName === "INPUT") return;
+  const i = L.indexOf(e.key.toUpperCase());
+  if (i >= 0 && i < cur.choices.length && !cur.answered) choose(i);
+  else if (e.key === "Enter" && !cur.answered) submit();
+});
+
+// ---------------------------------------------------------------- timed set
+let S = null;
+function setIntro() {
+  clearInterval(S && S.timer);
+  $("#set").innerHTML = `<h2>Timed set</h2>
+    <p>A mixed set, interleaved across archetypes, on one clock (the sum of the items' target times).
+    Move freely, flag items for review, change answers. When the clock runs out the set is submitted.
+    Afterwards you get a pacing report, not just a score.</p>
+    <div class="row"><label>Items <input id="setn" type="number" min="1" max="50" value="10" style="width:70px"></label>
+    <button class="btn" id="setgo">Start</button></div><p id="seterr" class="bad"></p>`;
+  $("#setgo").onclick = setStart;
+}
+async function setStart() {
+  let d;
+  try { d = await api("/api/set/start", {section: section(), n: +$("#setn").value || 10}); }
+  catch (e) { $("#seterr").textContent = e.message; return; }
+  S = {id: d.set_id, items: d.items, clock: d.clock_s, left: d.clock_s, pos: 0, ans: {}, spent: {}, flags: new Set(),
+       changes: 0, mark: performance.now(), done: false};
+  S.timer = setInterval(() => {
+    account(); S.left = S.clock - Object.values(S.spent).reduce((a, b) => a + b, 0);
+    const c = $("#sclock"); if (c) { c.textContent = mmss(S.left); c.className = "clock" + (S.left < 60 ? " bad" : ""); }
+    if (S.left <= 0) setFinish();
+  }, 250);
+  renderSet();
+}
+function account() {           // add the time since the last mark to the item on screen
+  const t = performance.now(), it = S.items[S.pos];
+  if (it && !S.done && S.pos >= 0) S.spent[it.item_id] = (S.spent[it.item_id] || 0) + (t - S.mark) / 1000;
+  S.mark = t;
+}
+function go(p) { account(); S.pos = p; renderSet(); }
+function renderSet() {
+  if (S.pos < 0) return renderReview();
+  const it = S.items[S.pos], a = S.ans[it.item_id];
+  $("#set").innerHTML = `
+    <div class="row meta" style="justify-content:space-between"><span>Question ${S.pos + 1} of ${S.items.length}</span>
+      <span>Time left <span class="clock" id="sclock">${mmss(S.left)}</span></span></div>
+    <div class="stem">${esc(it.stem)}</div>
+    ${it.choices.map((c, i) => `<button class="choice ${a === L[i] ? "sel" : ""}" data-i="${i}"><b>${L[i]}.</b> ${esc(c)}</button>`).join("")}
+    <div class="row" style="margin-top:12px">
+      <button class="btn ghost" id="prev" ${S.pos === 0 ? "disabled" : ""}>Previous</button>
+      <button class="btn ghost" id="flag">${S.flags.has(it.item_id) ? "Unflag" : "Flag for review"}</button>
+      <button class="btn" id="nxt">${S.pos === S.items.length - 1 ? "Review" : "Next"}</button></div>`;
+  $("#set").querySelectorAll(".choice").forEach((b) => b.onclick = () => {
+    const prev = S.ans[it.item_id], now = L[+b.dataset.i];
+    if (prev && prev !== now) S.changes++;
+    S.ans[it.item_id] = now; renderSet();
+  });
+  $("#prev").onclick = () => go(S.pos - 1);
+  $("#flag").onclick = () => { S.flags.has(it.item_id) ? S.flags.delete(it.item_id) : S.flags.add(it.item_id); renderSet(); };
+  $("#nxt").onclick = () => go(S.pos === S.items.length - 1 ? -1 : S.pos + 1);
+}
+function renderReview() {
+  const n = Object.keys(S.ans).length;
+  $("#set").innerHTML = `<div class="row meta" style="justify-content:space-between"><span>Review: ${n} of ${S.items.length} answered, ${S.flags.size} flagged</span>
+      <span>Time left <span class="clock" id="sclock">${mmss(S.left)}</span></span></div>
+    <div class="navgrid">${S.items.map((it, i) => `<button data-i="${i}" class="${S.ans[it.item_id] ? "ans" : ""} ${S.flags.has(it.item_id) ? "flag" : ""}">${i + 1}</button>`).join("")}</div>
+    <p class="meta">Blue = answered, orange border = flagged. Review time is not charged to any item.</p>
+    <button class="btn" id="endset">End set</button>`;
+  $("#set").querySelectorAll(".navgrid button").forEach((b) => b.onclick = () => go(+b.dataset.i));
+  $("#endset").onclick = setFinish;
+}
+async function setFinish() {
+  if (S.done) return;
+  account(); S.done = true; clearInterval(S.timer);
+  const answers = S.items.map((it) => ({item_id: it.item_id, given: S.ans[it.item_id] || null, seconds: S.spent[it.item_id] || 0}));
+  const r = await api("/api/set/finish", {set_id: S.id, answers, flags: S.flags.size, changes: S.changes});
+  $("#set").innerHTML = `<h2>${r.correct} / ${r.n} correct</h2>${paceHtml(r.pace)}
+    <h3>Items</h3><table><tr><th>#</th><th>Yours</th><th>Key</th><th>Time</th><th>Explanation</th></tr>
+    ${r.results.map((x, i) => `<tr><td>${i + 1}</td><td class="${x.correct ? "ok" : "bad"}">${esc(x.given || "-")}</td>
+      <td>${esc(x.key)}</td><td>${mmss(x.seconds)}</td><td>${esc(x.explanation)}</td></tr>`).join("")}</table>
+    <p><button class="btn" id="again">New set</button></p>`;
+  $("#again").onclick = setIntro;
+}
+function paceHtml(p) {
+  if (!p) return "";
+  const cp = p.checkpoints.map((c) => `<li class="${c.ok ? "ok" : "bad"}">After ${c.after} item${c.after === 1 ? "" : "s"}: used ${mmss(c.used_s)}, plan ${mmss(c.plan_s)}</li>`).join("");
+  const over = p.over_cap.map((o) => `<li class="${o.correct ? "warn" : "bad"}">Item ${o.pos}: ${mmss(o.seconds)} vs cap ${mmss(o.cap_s)} (${o.correct ? "right: time spent, not lost" : "wrong"})</li>`).join("") || "<li>None</li>";
+  const eg = p.endgame ? `<li class="${p.endgame.ok ? "ok" : "bad"}">Entering the last items: ${mmss(p.endgame.time_left_s)} left, needed about ${mmss(p.endgame.needed_s)}</li>` : "";
+  return `<div class="card"><h3 class="${p.passed ? "ok" : "bad"}">Pacing: ${p.passed ? "PASS" : "needs work"}</h3>
+    <p class="meta">Used ${mmss(p.used_s)} of ${mmss(p.clock_s)} &middot; ${p.flags} flagged &middot; ${p.changes} answer changes &middot; ${p.sinkholes.length} sinkholes</p>
+    <b>Checkpoints</b><ul>${cp}${eg}</ul><b>Over the per-item cap</b><ul>${over}</ul></div>`;
+}
+
+// ---------------------------------------------------------------- progress + bank
+async function loadProgress() {
+  const hours = +(($("#hours") || {}).value || 24);
+  const [p, sets] = await Promise.all([api("/api/progress?hours=" + hours), api("/api/sets")]);
+  const a = p.attempts, acc = a.n ? Math.round(100 * a.correct / a.n) + "%" : "-";
+  $("#progress").innerHTML = `<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Progress</h2>
+      <select id="hours">${[[24, "Last 24 hours"], [168, "Last 7 days"], [720, "Last 30 days"]].map(([h, t]) => `<option value="${h}" ${h === hours ? "selected" : ""}>${t}</option>`).join("")}</select></div>
+    <div class="stats" style="margin-top:12px">
+      <div><div class="stat">${a.n}</div><div class="meta">attempts</div></div>
+      <div><div class="stat">${acc}</div><div class="meta">accuracy</div></div>
+      <div><div class="stat">${a.on_pace}</div><div class="meta">correct and on time</div></div>
+      <div><div class="stat">${a.minutes}</div><div class="meta">minutes</div></div></div></div>
+    <div class="card"><h3>By section</h3><table><tr><th>Section</th><th>Attempts</th><th>Correct</th><th>Avg time</th></tr>
+      ${Object.entries(p.sections).map(([s, v]) => `<tr><td>${esc(s)}</td><td>${v.n}</td><td>${v.correct}</td><td>${mmss(v.avg_s)}</td></tr>`).join("") || "<tr><td colspan=4>No attempts yet</td></tr>"}</table>
+    <h3>Mastered in this window</h3><ul>${p.mastered.map((m) => `<li>${esc(m.section)} / ${esc(m.name)} <span class="meta">${esc(m.at_local)}</span></li>`).join("") || "<li>None</li>"}</ul>
+    <h3>Misses</h3><ul>${p.misses.map((m) => `<li>${esc(m.archetype)} <span class="meta">${m.seconds}s, ${esc(m.at_local)}</span></li>`).join("") || "<li>None</li>"}</ul></div>
+    <div class="card"><h3>Timed sets</h3><table><tr><th>Set</th><th>Started (UTC)</th><th>Score</th><th></th></tr>
+      ${sets.map((s) => `<tr><td>${s.id}</td><td>${esc(s.started)}</td><td>${s.correct}/${s.n}</td><td><a href="#" data-set="${s.id}">pacing</a></td></tr>`).join("") || "<tr><td colspan=4>None yet</td></tr>"}</table><div id="pacebox"></div></div>`;
+  $("#hours").onchange = loadProgress;
+  document.querySelectorAll("[data-set]").forEach((el) => el.onclick = async (e) => {
+    e.preventDefault(); $("#pacebox").innerHTML = paceHtml(await api("/api/pace?id=" + el.dataset.set));
+  });
+}
+async function loadBank() {
+  const q = section() ? "?section=" + encodeURIComponent(section()) : "";
+  const [rows, au] = await Promise.all([api("/api/archetypes" + q), api("/api/audit")]);
+  $("#bank").innerHTML = `<div class="card"><h2 style="margin-top:0">Archetypes</h2>
+    <table><tr><th>Archetype</th><th>Status</th><th>Streak</th><th>Live items</th><th>Accuracy</th><th>Avg / target</th></tr>
+    ${rows.map((r) => `<tr><td><b>${esc(r.name)}</b><div class="meta">${esc(r.section)} &middot; ${esc(r.pattern)}</div></td>
+      <td><span class="pill ${esc(r.status)}">${esc(r.status)}</span></td><td>${r.streak}/${r.need}</td>
+      <td>${r.live_items} of ${r.banked}</td><td>${r.attempts ? Math.round(100 * r.correct / r.attempts) + "%" : "-"}</td>
+      <td>${mmss(r.avg_s)} / ${mmss(r.target_s)}</td></tr>`).join("")}</table></div>
+    <div class="card"><h3 style="margin-top:0">Bank audit</h3>
+    <p class="meta">${au.total_items} items &middot; ${au.unverified_items} unverified (never served) &middot; ${au.burned_items} retired after a miss</p>
+    <ul>${au.problems.map((p) => `<li class="bad">Item ${p.item_id}: ${esc(p.issue)}</li>`).join("") || '<li class="ok">No item problems found.</li>'}
+    ${au.thin_archetypes.map((t) => `<li class="warn">${esc(t.name)}: ${t.live_items} live items left; add more so mastery spans distinct items.</li>`).join("")}</ul></div>`;
+}
+
+loadSections().then(() => show("drill")).catch((e) => { $("#drill").innerHTML = `<p class="bad">${esc(e.message)}</p>`; });
+</script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+section,archetype,difficulty,stem,choices,key,explanation,pattern,target_seconds
+Spanish,Ser vs. estar,Easy,"Choose the verb: Ella ___ cansada hoy.",es | está | son | somos,B,"A temporary state takes estar: está.","Uses ser for a temporary state.",45
+Spanish,Ser vs. estar,Easy,"Choose the verb: Nosotros ___ estudiantes.","[""somos"", ""estamos"", ""son""]",1,"Identity and profession take ser: somos.","Uses ser for a temporary state.",45
+Geography,Capital vs. largest city,Medium,"What is the capital of Australia?",Sydney | Melbourne | Canberra | Perth,Canberra,"Canberra is the capital; Sydney is the largest city.","Assumes the largest city is the capital.",30
