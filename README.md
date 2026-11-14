@@ -2,6 +2,8 @@
 
 A local practice app for any multiple-choice subject: it groups questions by the mistake they test, drills each mistake pattern until it is mastered under time, and grades timed sets on pacing as well as score.
 
+![The drill view on the sample bank: the mistake pattern, time against target and streak after an answer](docs/drill-view.jpg)
+
 ## Why it exists
 
 Topic-level practice treats every miss in "percents" the same, but most misses come from one specific error: adding two percent changes instead of multiplying them, reading "P only if Q" backwards, averaging times instead of adding rates. This engine stores each of those errors as an **archetype** and drills it directly. An archetype counts as mastered only after several consecutive answers that are both correct and inside the target time, on different questions, and it comes back for decay checks days and weeks later. It is a learning tool: bring your own questions (CSV or JSON), or start from the 21 original sample items.
