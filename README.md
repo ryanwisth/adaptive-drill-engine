@@ -2,6 +2,8 @@
 
 A local practice app for any multiple-choice subject: it groups questions by the mistake they test, drills each mistake pattern until it is mastered under time, and grades timed sets on pacing as well as score.
 
+**Plain-words write-up:** [A study app built around mistakes](https://ryanwisth.github.io/practice-engine.html)
+
 ![The drill view on the sample bank: the mistake pattern, time against target and streak after an answer](docs/drill-view.jpg)
 
 ## Why it exists
